@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -15,9 +15,62 @@ import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
 import { createId, initialData, moveCard, type BoardData } from "@/lib/kanban";
 
-export const KanbanBoard = () => {
-  const [board, setBoard] = useState<BoardData>(() => initialData);
+type KanbanBoardProps = {
+  onLogout?: () => void;
+  username?: string;
+};
+
+export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) => {
+  const [board, setBoard] = useState<BoardData | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadBoard = async () => {
+      try {
+        const response = await fetch("/api/board");
+        if (!response.ok) {
+          setBoard(initialData);
+          return;
+        }
+
+        const payload = (await response.json()) as { board?: BoardData };
+        setBoard(payload.board ?? initialData);
+      } catch {
+        setBoard(initialData);
+      }
+    };
+
+    loadBoard();
+  }, []);
+
+  const persistBoard = useCallback(async (nextBoard: BoardData) => {
+    try {
+      await fetch("/api/board", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(nextBoard),
+      });
+    } catch {
+      // If persistence fails, keep local changes visible and allow retry on next edit.
+    }
+  }, []);
+
+  const updateBoard = useCallback(
+    (updater: (prev: BoardData) => BoardData) => {
+      setBoard((prev) => {
+        if (!prev) {
+          return prev;
+        }
+
+        const nextBoard = updater(prev);
+        void persistBoard(nextBoard);
+        return nextBoard;
+      });
+    },
+    [persistBoard]
+  );
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -25,7 +78,7 @@ export const KanbanBoard = () => {
     })
   );
 
-  const cardsById = useMemo(() => board.cards, [board.cards]);
+  const cardsById = useMemo(() => board?.cards ?? {}, [board]);
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveCardId(event.active.id as string);
@@ -39,14 +92,14 @@ export const KanbanBoard = () => {
       return;
     }
 
-    setBoard((prev) => ({
+    updateBoard((prev) => ({
       ...prev,
       columns: moveCard(prev.columns, active.id as string, over.id as string),
     }));
   };
 
   const handleRenameColumn = (columnId: string, title: string) => {
-    setBoard((prev) => ({
+    updateBoard((prev) => ({
       ...prev,
       columns: prev.columns.map((column) =>
         column.id === columnId ? { ...column, title } : column
@@ -56,7 +109,7 @@ export const KanbanBoard = () => {
 
   const handleAddCard = (columnId: string, title: string, details: string) => {
     const id = createId("card");
-    setBoard((prev) => ({
+    updateBoard((prev) => ({
       ...prev,
       cards: {
         ...prev.cards,
@@ -71,7 +124,7 @@ export const KanbanBoard = () => {
   };
 
   const handleDeleteCard = (columnId: string, cardId: string) => {
-    setBoard((prev) => {
+    updateBoard((prev) => {
       return {
         ...prev,
         cards: Object.fromEntries(
@@ -80,14 +133,24 @@ export const KanbanBoard = () => {
         columns: prev.columns.map((column) =>
           column.id === columnId
             ? {
-                ...column,
-                cardIds: column.cardIds.filter((id) => id !== cardId),
-              }
+              ...column,
+              cardIds: column.cardIds.filter((id) => id !== cardId),
+            }
             : column
         ),
       };
     });
   };
+
+  if (!board) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-[480px] items-center px-6">
+        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
+          Loading board...
+        </p>
+      </main>
+    );
+  }
 
   const activeCard = activeCardId ? cardsById[activeCardId] : null;
 
@@ -118,6 +181,20 @@ export const KanbanBoard = () => {
               <p className="mt-2 text-lg font-semibold text-[var(--primary-blue)]">
                 One board. Five columns. Zero clutter.
               </p>
+              <div className="mt-3 flex items-center gap-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
+                  Signed in as {username}
+                </p>
+                {onLogout ? (
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    className="rounded-full border border-[var(--stroke)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-[var(--navy-dark)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)]"
+                  >
+                    Log out
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-4">
@@ -144,7 +221,9 @@ export const KanbanBoard = () => {
               <KanbanColumn
                 key={column.id}
                 column={column}
-                cards={column.cardIds.map((cardId) => board.cards[cardId])}
+                cards={column.cardIds
+                  .map((cardId) => board.cards[cardId])
+                  .filter((card): card is (typeof board.cards)[string] => Boolean(card))}
                 onRename={handleRenameColumn}
                 onAddCard={handleAddCard}
                 onDeleteCard={handleDeleteCard}
