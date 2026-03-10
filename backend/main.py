@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse
@@ -14,6 +16,8 @@ app = FastAPI(title="Project Management MVP API")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "app.db"
+ALEMBIC_INI_PATH = Path(__file__).resolve().parent / "alembic.ini"
+ALEMBIC_SCRIPT_PATH = Path(__file__).resolve().parent / "alembic"
 SESSION_COOKIE_NAME = "pm_session"
 SESSION_DURATION_DAYS = 7
 
@@ -100,38 +104,69 @@ def get_db() -> sqlite3.Connection:
   return connection
 
 
+def run_migrations() -> None:
+  DATA_DIR.mkdir(parents=True, exist_ok=True)
+  config = Config(str(ALEMBIC_INI_PATH))
+  config.set_main_option("script_location", str(ALEMBIC_SCRIPT_PATH))
+  config.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
+
+  with sqlite3.connect(DB_PATH) as db:
+    table_names = {
+      row[0]
+      for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    }
+
+    has_alembic_version = "alembic_version" in table_names
+    alembic_version_rows = (
+      db.execute("SELECT version_num FROM alembic_version").fetchall()
+      if has_alembic_version
+      else []
+    )
+
+  has_any_legacy_table = bool({"users", "sessions", "boards"}.intersection(table_names))
+  has_empty_alembic_version = has_alembic_version and not alembic_version_rows
+
+  if has_any_legacy_table and (not has_alembic_version or has_empty_alembic_version):
+    command.stamp(config, "head")
+
+    with sqlite3.connect(DB_PATH) as db:
+      db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          username TEXT NOT NULL UNIQUE,
+          password TEXT NOT NULL
+        )
+        """
+      )
+      db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+          token TEXT PRIMARY KEY,
+          user_id INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """
+      )
+      db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS boards (
+          user_id INTEGER PRIMARY KEY,
+          payload TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """
+      )
+    return
+
+  command.upgrade(config, "head")
+
+
 def initialize_database() -> None:
   with get_db() as db:
-    db.execute(
-      """
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL
-      )
-      """
-    )
-    db.execute(
-      """
-      CREATE TABLE IF NOT EXISTS sessions (
-        token TEXT PRIMARY KEY,
-        user_id INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-      )
-      """
-    )
-    db.execute(
-      """
-      CREATE TABLE IF NOT EXISTS boards (
-        user_id INTEGER PRIMARY KEY,
-        payload TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-      )
-      """
-    )
     db.execute(
       """
       INSERT INTO users (username, password)
@@ -140,27 +175,9 @@ def initialize_database() -> None:
       """,
       ("user", "password"),
     )
-    user_row = db.execute(
-      "SELECT id FROM users WHERE username = ?",
-      ("user",),
-    ).fetchone()
-    if user_row:
-      db.execute(
-        """
-        INSERT INTO boards (user_id, payload, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(user_id) DO NOTHING
-        """,
-        (
-          user_row["id"],
-          json.dumps(DEFAULT_BOARD),
-          datetime.now(UTC).isoformat(),
-        ),
-      )
-
-
 @app.on_event("startup")
 def on_startup() -> None:
+  run_migrations()
   initialize_database()
 
 

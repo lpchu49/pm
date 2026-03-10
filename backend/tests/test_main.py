@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import sqlite3
 from typing import Iterator
 
 import pytest
@@ -13,6 +14,9 @@ import main
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setattr(main, "DATA_DIR", tmp_path)
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "app.db")
+    monkeypatch.setattr(main, "ALEMBIC_INI_PATH", Path(main.__file__).resolve().parent / "alembic.ini")
+    monkeypatch.setattr(main, "ALEMBIC_SCRIPT_PATH", Path(main.__file__).resolve().parent / "alembic")
+    main.run_migrations()
     main.initialize_database()
 
     with TestClient(main.app) as test_client:
@@ -108,3 +112,35 @@ def test_board_persists_changes_across_relogin(client: TestClient) -> None:
     refreshed_board_response = client.get("/api/board")
     assert refreshed_board_response.status_code == 200
     assert refreshed_board_response.json()["board"]["columns"][0]["title"] == "Persisted Backlog"
+
+
+def test_run_migrations_stamps_legacy_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = tmp_path / "app.db"
+    monkeypatch.setattr(main, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(main, "DB_PATH", db_path)
+    monkeypatch.setattr(main, "ALEMBIC_INI_PATH", Path(main.__file__).resolve().parent / "alembic.ini")
+    monkeypatch.setattr(main, "ALEMBIC_SCRIPT_PATH", Path(main.__file__).resolve().parent / "alembic")
+
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password TEXT NOT NULL
+            )
+            """
+        )
+
+    main.run_migrations()
+
+    with sqlite3.connect(db_path) as db:
+        row = db.execute("SELECT version_num FROM alembic_version").fetchone()
+        tables = {
+            row[0]
+            for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        }
+
+    assert row is not None
+    assert row[0] == "20260310_0001"
+    assert {"users", "sessions", "boards"}.issubset(tables)

@@ -78,6 +78,7 @@ const findColumnId = (columns: Column[], id: string) => {
   if (isColumnId(columns, id)) {
     return id;
   }
+
   return columns.find((column) => column.cardIds.includes(id))?.id;
 };
 

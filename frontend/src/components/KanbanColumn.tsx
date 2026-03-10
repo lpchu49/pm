@@ -47,7 +47,7 @@ export const KanbanColumn = ({
           />
         </div>
       </div>
-      <div className="mt-4 flex flex-1 flex-col gap-3">
+      <div className="mt-4 flex flex-1 flex-col gap-3" data-testid={`dropzone-${column.id}`}>
         <SortableContext items={column.cardIds} strategy={verticalListSortingStrategy}>
           {cards.map((card) => (
             <KanbanCard

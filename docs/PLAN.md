@@ -12,8 +12,52 @@ Status legend:
 
 ## Handoff Snapshot (2026-03-10)
 
+### Latest handoff update (2026-03-10, stop point)
+
+This section captures the exact state at the point work was paused.
+
+What is confirmed working:
+- Backend auth/session flow with SQLite persistence.
+- Board persistence across logout/login (`GET /api/board`, `PUT /api/board`).
+- Alembic migration integration added and startup crash from legacy DB state addressed.
+- Container startup now works again with existing volume data after migration compatibility fixes.
+
+What is currently unresolved:
+- User-reported drag/drop issue into empty columns is still reproducible in real usage.
+- Recent attempts improved targeting logic but did not fully resolve the behavior.
+
+Latest reproducible signal:
+- Playwright suite: 7 passed, 1 failed.
+- Failing test: `moves a card into an empty column` in `frontend/tests/kanban.spec.ts`.
+- Failure symptom: dropped card does not appear in target empty column after drag.
+
+Current uncommitted files (work in progress):
+- `backend/main.py`
+- `backend/pyproject.toml`
+- `backend/tests/test_main.py`
+- `backend/uv.lock`
+- `backend/alembic.ini`
+- `backend/alembic/env.py`
+- `backend/alembic/script.py.mako`
+- `backend/alembic/versions/20260310_0001_initial_schema.py`
+- `frontend/src/components/KanbanBoard.tsx`
+- `frontend/src/components/KanbanColumn.tsx`
+- `frontend/src/lib/kanban.ts`
+- `frontend/src/lib/kanban.test.ts`
+- `frontend/tests/kanban.spec.ts`
+
+Important note for next engineer:
+- `frontend/test-results/.last-run.json` may appear modified after Playwright runs; this is generated output and should not drive product decisions.
+
+Recommended next debug steps for empty-column drag bug:
+1. Add temporary logging in `handleDragOver` and `handleDragEnd` in `frontend/src/components/KanbanBoard.tsx` to capture `active.id`, `over?.id`, and final resolved target.
+2. Confirm whether `event.over` is null or pointing to a card in another column at mouse-up for empty-column drops.
+3. If needed, switch to `rectIntersection` or a custom collision strategy scoped to the active column grid instead of broad global collision fallback.
+4. Validate by manual drag to empty columns and by a deterministic e2e test that first prepares known column state.
+5. Only commit after e2e is green for both `moves a card between columns` and `moves a card into an empty column`.
+
 ### Implemented so far
-- Parts 1-4 are implemented and validated.
+- Parts 1-5 are implemented and validated.
 - Frontend static build is served by FastAPI at `/`.
 - Backend auth is implemented with server-side SQLite session persistence:
 	- `GET /api/auth/session`
@@ -25,9 +69,9 @@ Status legend:
 
 ### Test status
 - Frontend unit tests pass.
-- Frontend e2e tests pass (including auth-required flows).
+- Frontend e2e currently has 1 failing case (`moves a card into an empty column`); all other e2e cases pass.
 - Backend API tests now exist and pass in `backend/tests/test_main.py`.
-- Last backend test run result: `5 passed`.
+- Last backend test run result: `8 passed`.
 
 ### Verified run commands
 - Start app:
@@ -57,9 +101,9 @@ Status legend:
 - Authentication currently stores plain-text password for seeded MVP user by design/scope; replace with proper hashing when auth is hardened.
 
 ### Next recommended steps (for next engineer)
-1. Start Part 5 by drafting the Kanban persistence schema doc in `docs/` and get user sign-off.
-2. Keep current auth/session tables as-is, then extend schema with board JSON storage tied to user.
-3. Add/expand backend tests for new schema/data-access layer before implementing Part 6 API routes.
+1. Start Part 6 by formalizing backend board API behavior on top of approved Part 5 model.
+2. Complete Part 7 integration hardening after Part 6 API contract is finalized.
+3. Start Part 8 only after Parts 6-7 are marked complete in this plan.
 
 ## Part 1: Planning and baseline documentation
 
@@ -175,23 +219,54 @@ Status legend:
 - Keep MVP simple while leaving migration path toward higher-scale database backends.
 
 ### Checklist
-- [ ] Propose schema for:
-	- [ ] Users
-	- [ ] Single board per user
-	- [ ] Board JSON payload persistence
-	- [ ] Timestamps/versioning fields needed for updates
-- [ ] Document design in `docs/` and request user sign-off before implementation.
-- [ ] Define data access boundaries so storage backend can evolve from SQLite later.
-- [ ] Specify migration/init strategy so DB is created automatically if missing.
+- [x] Propose schema for:
+	- [x] Users
+	- [x] Single board per user
+	- [x] Board JSON payload persistence
+	- [x] Timestamps/versioning fields needed for updates
+- [x] Document design in `docs/` and request user sign-off before implementation.
+- [x] Define data access boundaries so storage backend can evolve from SQLite later.
+- [x] Specify migration/init strategy so DB is created automatically if missing.
 
 ### Tests
-- [ ] Schema can be created from empty state.
-- [ ] Seed and retrieval test for one user + one board JSON document.
-- [ ] Update test verifies board JSON is replaced/updated correctly.
+- [x] Schema can be created from empty state.
+- [x] Seed and retrieval test for one user + one board JSON document.
+- [x] Update test verifies board JSON is replaced/updated correctly.
 
 ### Success criteria
-- [ ] User approves documented schema.
-- [ ] Backend can reliably persist and retrieve board state per user.
+- [x] User approves documented schema.
+- [x] Backend can reliably persist and retrieve board state per user.
+
+### Approved design details
+
+Decisions:
+- Storage shape: one JSON payload per user board.
+- Board content only: persist board columns/cards payload (no extra board-domain metadata for MVP).
+- Update model: full-replace writes via `PUT /api/board`.
+- Concurrency: last-write-wins.
+- Board creation: lazy on first board read (`GET /api/board`).
+- API scope for MVP: keep `GET /api/board` and `PUT /api/board`.
+- Validation behavior: reject invalid board payloads (do not auto-heal).
+
+Schema:
+- `users`
+	- `id` INTEGER PRIMARY KEY AUTOINCREMENT
+	- `username` TEXT NOT NULL UNIQUE
+	- `password` TEXT NOT NULL
+- `sessions`
+	- `token` TEXT PRIMARY KEY
+	- `user_id` INTEGER NOT NULL REFERENCES `users(id)`
+	- `created_at` TEXT NOT NULL
+	- `expires_at` TEXT NOT NULL
+- `boards`
+	- `user_id` INTEGER PRIMARY KEY REFERENCES `users(id)`
+	- `payload` TEXT NOT NULL
+	- `updated_at` TEXT NOT NULL
+
+Migration/init strategy:
+- Alembic is the source of truth for schema changes.
+- Backend startup runs `alembic upgrade head` programmatically.
+- If DB file is missing, SQLite DB is created and migrations are applied automatically.
 
 ## Part 6: Backend Kanban API
 

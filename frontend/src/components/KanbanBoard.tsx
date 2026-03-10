@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
   PointerSensor,
   useSensor,
   useSensors,
-  closestCorners,
+  pointerWithin,
   type DragEndEvent,
+  type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
@@ -23,6 +24,7 @@ type KanbanBoardProps = {
 export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) => {
   const [board, setBoard] = useState<BoardData | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const lastOverIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const loadBoard = async () => {
@@ -82,19 +84,29 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveCardId(event.active.id as string);
+    lastOverIdRef.current = null;
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    if (event.over?.id) {
+      lastOverIdRef.current = event.over.id as string;
+    }
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
-    const { active, over } = event;
+    const { active } = event;
     setActiveCardId(null);
 
-    if (!over || active.id === over.id) {
+    const overId = (event.over?.id as string | undefined) ?? lastOverIdRef.current;
+    lastOverIdRef.current = null;
+
+    if (!overId || active.id === overId) {
       return;
     }
 
     updateBoard((prev) => ({
       ...prev,
-      columns: moveCard(prev.columns, active.id as string, over.id as string),
+      columns: moveCard(prev.columns, active.id as string, overId),
     }));
   };
 
@@ -212,8 +224,9 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
 
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCorners}
+          collisionDetection={pointerWithin}
           onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
           onDragEnd={handleDragEnd}
         >
           <section className="grid gap-6 lg:grid-cols-5">
