@@ -1,6 +1,8 @@
 from pathlib import Path
 import sys
 import sqlite3
+import os
+import re
 from typing import Iterator
 
 import pytest
@@ -133,6 +135,95 @@ def test_session_with_deleted_user_is_unauthorized(client: TestClient) -> None:
     session_response = client.get("/api/auth/session")
     assert session_response.status_code == 200
     assert session_response.json() == {"authenticated": False}
+
+
+def test_ai_diagnostic_requires_auth(client: TestClient) -> None:
+    response = client.post("/api/ai/diagnostic", json={"prompt": "2+2"})
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Unauthorized"}
+
+
+def test_ai_diagnostic_rejects_missing_api_key(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "user", "password": "password"},
+    )
+    assert login_response.status_code == 200
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    response = client.post("/api/ai/diagnostic", json={"prompt": "2+2"})
+    assert response.status_code == 500
+    assert response.json() == {"detail": "OPENROUTER_API_KEY is not configured"}
+
+
+def test_ai_diagnostic_handles_openrouter_non_200(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "user", "password": "password"},
+    )
+    assert login_response.status_code == 200
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    def fake_call_openrouter(_prompt: str) -> str:
+        raise main.HTTPException(status_code=502, detail="OpenRouter error (429): rate limit")
+
+    monkeypatch.setattr(main, "call_openrouter", fake_call_openrouter)
+
+    response = client.post("/api/ai/diagnostic", json={"prompt": "2+2"})
+    assert response.status_code == 502
+    assert response.json() == {"detail": "OpenRouter error (429): rate limit"}
+
+
+def test_ai_diagnostic_returns_model_output(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "user", "password": "password"},
+    )
+    assert login_response.status_code == 200
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(main, "call_openrouter", lambda _prompt: "4")
+
+    response = client.post("/api/ai/diagnostic", json={"prompt": "2+2"})
+    assert response.status_code == 200
+    assert response.json() == {"model": "openai/gpt-oss-120b", "output": "4"}
+
+
+def test_ai_diagnostic_live_openrouter_network(client: TestClient) -> None:
+    if os.getenv("RUN_OPENROUTER_LIVE_TEST") != "1":
+        pytest.skip("Set RUN_OPENROUTER_LIVE_TEST=1 to run the live OpenRouter test")
+
+    if not os.getenv("OPENROUTER_API_KEY"):
+        pytest.skip("OPENROUTER_API_KEY is required for live OpenRouter test")
+
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "user", "password": "password"},
+    )
+    assert login_response.status_code == 200
+
+    response = client.post(
+        "/api/ai/diagnostic",
+        json={"prompt": "What is 2+2? Respond with just the number."},
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert payload["model"] == main.OPENROUTER_MODEL
+    assert isinstance(payload["output"], str)
+    assert re.search(r"\b4\b", payload["output"]) is not None
 
 
 def test_board_persists_changes_across_relogin(client: TestClient) -> None:

@@ -1,6 +1,9 @@
 import secrets
 import sqlite3
 import json
+import os
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -20,6 +23,8 @@ ALEMBIC_INI_PATH = Path(__file__).resolve().parent / "alembic.ini"
 ALEMBIC_SCRIPT_PATH = Path(__file__).resolve().parent / "alembic"
 SESSION_COOKIE_NAME = "pm_session"
 SESSION_DURATION_DAYS = 7
+OPENROUTER_MODEL = "openai/gpt-oss-120b"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 class LoginRequest(BaseModel):
@@ -71,6 +76,10 @@ class BoardModel(BaseModel):
       raise ValueError("All cards must be referenced by a column")
 
     return self
+
+
+class DiagnosticAIRequest(BaseModel):
+  prompt: str = "What is 2+2? Answer with just the number."
 
 
 DEFAULT_BOARD: dict[str, object] = {
@@ -237,6 +246,68 @@ def get_session_user(session_token: str | None) -> dict[str, str | int] | None:
     return {"id": row["id"], "username": row["username"]}
 
 
+def get_openrouter_api_key() -> str:
+  api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+  if not api_key:
+    raise HTTPException(
+      status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+      detail="OPENROUTER_API_KEY is not configured",
+    )
+  return api_key
+
+
+def call_openrouter(prompt: str) -> str:
+  api_key = get_openrouter_api_key()
+  request_body = {
+    "model": OPENROUTER_MODEL,
+    "messages": [
+      {"role": "user", "content": prompt},
+    ],
+  }
+
+  encoded_body = json.dumps(request_body).encode("utf-8")
+  request = urllib.request.Request(
+    OPENROUTER_API_URL,
+    data=encoded_body,
+    headers={
+      "Authorization": f"Bearer {api_key}",
+      "Content-Type": "application/json",
+    },
+    method="POST",
+  )
+
+  try:
+    with urllib.request.urlopen(request, timeout=30) as response:
+      payload = json.loads(response.read().decode("utf-8"))
+  except urllib.error.HTTPError as exc:
+    body = exc.read().decode("utf-8", errors="replace")
+    raise HTTPException(
+      status_code=status.HTTP_502_BAD_GATEWAY,
+      detail=f"OpenRouter error ({exc.code}): {body}",
+    ) from exc
+  except urllib.error.URLError as exc:
+    raise HTTPException(
+      status_code=status.HTTP_502_BAD_GATEWAY,
+      detail=f"OpenRouter connection failed: {exc.reason}",
+    ) from exc
+
+  try:
+    output = payload["choices"][0]["message"]["content"]
+  except (KeyError, IndexError, TypeError) as exc:
+    raise HTTPException(
+      status_code=status.HTTP_502_BAD_GATEWAY,
+      detail="OpenRouter returned an unexpected response shape",
+    ) from exc
+
+  if not isinstance(output, str) or not output.strip():
+    raise HTTPException(
+      status_code=status.HTTP_502_BAD_GATEWAY,
+      detail="OpenRouter returned empty output",
+    )
+
+  return output
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "pm-backend"}
@@ -342,6 +413,19 @@ def board_put(board: BoardModel, pm_session: str | None = Cookie(default=None)) 
     )
 
   return {"ok": True}
+
+
+@app.post("/api/ai/diagnostic")
+def ai_diagnostic(
+  payload: DiagnosticAIRequest,
+  pm_session: str | None = Cookie(default=None),
+) -> dict[str, str]:
+  user = get_session_user(pm_session)
+  if not user:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+  output = call_openrouter(payload.prompt)
+  return {"model": OPENROUTER_MODEL, "output": output}
 
 
 if STATIC_DIR.exists():
