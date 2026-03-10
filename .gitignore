@@ -176,3 +176,8 @@ cython_debug/
 
 backend/data/
 
+# Playwright artifacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+
