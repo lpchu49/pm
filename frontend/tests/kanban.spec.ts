@@ -1,5 +1,61 @@
 import { expect, test, type Page } from "@playwright/test";
 
+type BoardPayload = {
+  columns: Array<{ id: string; title: string; cardIds: string[] }>;
+  cards: Record<string, { id: string; title: string; details: string }>;
+};
+
+const buildDeterministicBoard = (): BoardPayload => ({
+  columns: [
+    { id: "col-backlog", title: "Backlog", cardIds: ["card-1", "card-2"] },
+    { id: "col-discovery", title: "Discovery", cardIds: ["card-3"] },
+    { id: "col-progress", title: "In Progress", cardIds: ["card-4"] },
+    { id: "col-review", title: "Review", cardIds: [] },
+    { id: "col-done", title: "Done", cardIds: [] },
+  ],
+  cards: {
+    "card-1": {
+      id: "card-1",
+      title: "Align roadmap themes",
+      details: "Draft quarterly themes with impact statements and metrics.",
+    },
+    "card-2": {
+      id: "card-2",
+      title: "Gather customer signals",
+      details: "Review support tags, sales notes, and churn feedback.",
+    },
+    "card-3": {
+      id: "card-3",
+      title: "Prototype analytics view",
+      details: "Sketch initial dashboard layout and key drill-downs.",
+    },
+    "card-4": {
+      id: "card-4",
+      title: "Refine status language",
+      details: "Standardize column labels and tone across the board.",
+    },
+  },
+});
+
+const resetBoard = async (page: Page) => {
+  const board = buildDeterministicBoard();
+  const response = await page.evaluate(async (nextBoard) => {
+    const apiResponse = await fetch("/api/board", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(nextBoard),
+    });
+
+    return { ok: apiResponse.ok };
+  }, board);
+
+  expect(response.ok).toBeTruthy();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
+};
+
 const login = async (page: Page) => {
   await page.goto("/");
   await page.getByLabel("Username").fill("user");
@@ -34,12 +90,14 @@ test("rejects invalid credentials", async ({ page }) => {
 
 test("loads the kanban board after login", async ({ page }) => {
   await login(page);
+  await resetBoard(page);
   await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
   await expect(page.locator('[data-testid^="column-"]')).toHaveCount(5);
 });
 
 test("adds a card to a column", async ({ page }) => {
   await login(page);
+  await resetBoard(page);
   const firstColumn = page.locator('[data-testid^="column-"]').first();
   const cardTitle = `Playwright card ${Date.now()}`;
   await firstColumn.getByRole("button", { name: /add a card/i }).click();
@@ -51,6 +109,7 @@ test("adds a card to a column", async ({ page }) => {
 
 test("moves a card between columns", async ({ page }) => {
   await login(page);
+  await resetBoard(page);
   const sourceColumn = page.getByTestId("column-col-backlog");
   const sourceCardTestId = await getFirstCardTestId(sourceColumn);
   const card = page.getByTestId(sourceCardTestId);
@@ -77,6 +136,7 @@ test("moves a card between columns", async ({ page }) => {
 
 test("moves a card into an empty column", async ({ page }) => {
   await login(page);
+  await resetBoard(page);
 
   const reviewColumn = page.getByTestId("column-col-review");
   const backlogColumn = page.getByTestId("column-col-backlog");
@@ -132,12 +192,14 @@ test("moves a card into an empty column", async ({ page }) => {
 
 test("logs out back to sign-in screen", async ({ page }) => {
   await login(page);
+  await resetBoard(page);
   await page.getByRole("button", { name: /log out/i }).click();
   await expect(page.getByRole("heading", { name: /sign in/i })).toBeVisible();
 });
 
 test("persists board changes across logout and login", async ({ page }) => {
   await login(page);
+  await resetBoard(page);
 
   const firstColumn = page.locator('[data-testid="column-col-backlog"]');
   const titleInput = firstColumn.getByLabel("Column title");
@@ -151,4 +213,20 @@ test("persists board changes across logout and login", async ({ page }) => {
   await expect(
     page.locator('[data-testid="column-col-backlog"]').getByLabel("Column title")
   ).toHaveValue("Persisted Backlog");
+});
+
+test("persists board changes after page refresh", async ({ page }) => {
+  await login(page);
+  await resetBoard(page);
+
+  const firstColumn = page.locator('[data-testid="column-col-backlog"]');
+  const titleInput = firstColumn.getByLabel("Column title");
+  await titleInput.fill("Refresh Persisted Backlog");
+  await expect(titleInput).toHaveValue("Refresh Persisted Backlog");
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Kanban Studio" })).toBeVisible();
+  await expect(
+    page.locator('[data-testid="column-col-backlog"]').getByLabel("Column title")
+  ).toHaveValue("Refresh Persisted Backlog");
 });

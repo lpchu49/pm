@@ -81,7 +81,58 @@ def test_board_requires_auth(client: TestClient) -> None:
     response = client.get("/api/board")
 
     assert response.status_code == 401
-    assert response.json() == {"message": "Unauthorized"}
+    assert response.json() == {"detail": "Unauthorized"}
+
+
+def test_board_put_requires_auth(client: TestClient) -> None:
+    response = client.put("/api/board", json=main.DEFAULT_BOARD)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Unauthorized"}
+
+
+def test_board_put_rejects_invalid_payload(client: TestClient) -> None:
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "user", "password": "password"},
+    )
+    assert login_response.status_code == 200
+
+    invalid_board = {
+        "columns": [
+            {"id": "col-backlog", "title": "Backlog", "cardIds": ["card-1", "card-missing"]},
+            {"id": "col-review", "title": "Review", "cardIds": []},
+        ],
+        "cards": {
+            "card-1": {"id": "card-1", "title": "Card 1", "details": "Valid card"},
+        },
+    }
+
+    response = client.put("/api/board", json=invalid_board)
+    assert response.status_code == 422
+
+
+def test_session_with_deleted_user_is_unauthorized(client: TestClient) -> None:
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "user", "password": "password"},
+    )
+    assert login_response.status_code == 200
+
+    token = login_response.cookies[main.SESSION_COOKIE_NAME]
+
+    with main.get_db() as db:
+        db.execute("DELETE FROM users WHERE username = ?", ("user",))
+
+    client.cookies.set(main.SESSION_COOKIE_NAME, token)
+
+    board_response = client.get("/api/board")
+    assert board_response.status_code == 401
+    assert board_response.json() == {"detail": "Unauthorized"}
+
+    session_response = client.get("/api/auth/session")
+    assert session_response.status_code == 200
+    assert session_response.json() == {"authenticated": False}
 
 
 def test_board_persists_changes_across_relogin(client: TestClient) -> None:

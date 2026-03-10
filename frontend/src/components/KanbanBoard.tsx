@@ -2,14 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  type CollisionDetection,
   DndContext,
   DragOverlay,
   PointerSensor,
+  rectIntersection,
   useSensor,
   useSensors,
   pointerWithin,
   type DragEndEvent,
-  type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
@@ -24,40 +25,65 @@ type KanbanBoardProps = {
 export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) => {
   const [board, setBoard] = useState<BoardData | null>(null);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
-  const lastOverIdRef = useRef<string | null>(null);
+  const [isLoadingBoard, setIsLoadingBoard] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
+  const failedSaveBoardRef = useRef<BoardData | null>(null);
 
-  useEffect(() => {
-    const loadBoard = async () => {
-      try {
-        const response = await fetch("/api/board");
-        if (!response.ok) {
-          setBoard(initialData);
-          return;
-        }
+  const loadBoard = useCallback(async () => {
+    setIsLoadingBoard(true);
+    setLoadError(null);
 
-        const payload = (await response.json()) as { board?: BoardData };
-        setBoard(payload.board ?? initialData);
-      } catch {
-        setBoard(initialData);
+    try {
+      const response = await fetch("/api/board");
+      if (!response.ok) {
+        throw new Error("Board request failed");
       }
-    };
 
-    loadBoard();
+      const payload = (await response.json()) as { board?: BoardData };
+      setBoard(payload.board ?? initialData);
+    } catch {
+      setLoadError("Unable to load the board right now.");
+      setBoard(null);
+    } finally {
+      setIsLoadingBoard(false);
+    }
   }, []);
 
+  useEffect(() => {
+    void loadBoard();
+  }, [loadBoard]);
+
   const persistBoard = useCallback(async (nextBoard: BoardData) => {
+    setSaveState("saving");
     try {
-      await fetch("/api/board", {
+      const response = await fetch("/api/board", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(nextBoard),
       });
+
+      if (!response.ok) {
+        throw new Error("Board save failed");
+      }
+
+      failedSaveBoardRef.current = null;
+      setSaveState("idle");
     } catch {
-      // If persistence fails, keep local changes visible and allow retry on next edit.
+      failedSaveBoardRef.current = nextBoard;
+      setSaveState("error");
     }
   }, []);
+
+  const retrySave = useCallback(() => {
+    if (!failedSaveBoardRef.current) {
+      return;
+    }
+
+    void persistBoard(failedSaveBoardRef.current);
+  }, [persistBoard]);
 
   const updateBoard = useCallback(
     (updater: (prev: BoardData) => BoardData) => {
@@ -82,23 +108,24 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
 
   const cardsById = useMemo(() => board?.cards ?? {}, [board]);
 
+  const collisionDetectionStrategy = useCallback<CollisionDetection>((args) => {
+    const pointerCollisions = pointerWithin(args);
+    if (pointerCollisions.length > 0) {
+      return pointerCollisions;
+    }
+
+    return rectIntersection(args);
+  }, []);
+
   const handleDragStart = (event: DragStartEvent) => {
     setActiveCardId(event.active.id as string);
-    lastOverIdRef.current = null;
-  };
-
-  const handleDragOver = (event: DragOverEvent) => {
-    if (event.over?.id) {
-      lastOverIdRef.current = event.over.id as string;
-    }
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active } = event;
     setActiveCardId(null);
 
-    const overId = (event.over?.id as string | undefined) ?? lastOverIdRef.current;
-    lastOverIdRef.current = null;
+    const overId = event.over?.id as string | undefined;
 
     if (!overId || active.id === overId) {
       return;
@@ -154,12 +181,36 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
     });
   };
 
-  if (!board) {
+  if (isLoadingBoard) {
     return (
       <main className="mx-auto flex min-h-screen max-w-[480px] items-center px-6">
         <p className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
           Loading board...
         </p>
+      </main>
+    );
+  }
+
+  if (!board) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-[520px] items-center px-6">
+        <section className="w-full rounded-3xl border border-[var(--stroke)] bg-white/85 p-8 shadow-[var(--shadow)]">
+          <h1 className="font-display text-3xl font-semibold text-[var(--navy-dark)]">
+            Board unavailable
+          </h1>
+          <p className="mt-3 text-sm font-medium text-[var(--gray-text)]">
+            {loadError ?? "Unable to load the board right now."}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              void loadBoard();
+            }}
+            className="mt-6 rounded-full bg-[var(--secondary-purple)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:brightness-110"
+          >
+            Retry
+          </button>
+        </section>
       </main>
     );
   }
@@ -220,13 +271,33 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
               </div>
             ))}
           </div>
+          <div className="min-h-5" aria-live="polite">
+            {saveState === "saving" ? (
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
+                Saving changes...
+              </p>
+            ) : null}
+            {saveState === "error" ? (
+              <div className="flex items-center gap-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--secondary-purple)]">
+                  Save failed. Changes are local until retry succeeds.
+                </p>
+                <button
+                  type="button"
+                  onClick={retrySave}
+                  className="rounded-full border border-[var(--stroke)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--navy-dark)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)]"
+                >
+                  Retry save
+                </button>
+              </div>
+            ) : null}
+          </div>
         </header>
 
         <DndContext
           sensors={sensors}
-          collisionDetection={pointerWithin}
+          collisionDetection={collisionDetectionStrategy}
           onDragStart={handleDragStart}
-          onDragOver={handleDragOver}
           onDragEnd={handleDragEnd}
         >
           <section className="grid gap-6 lg:grid-cols-5">

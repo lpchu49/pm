@@ -7,10 +7,10 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi import Cookie, Response, status
+from fastapi import Cookie, HTTPException, Response, status
 
 app = FastAPI(title="Project Management MVP API")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -42,6 +42,35 @@ class ColumnModel(BaseModel):
 class BoardModel(BaseModel):
   columns: list[ColumnModel]
   cards: dict[str, CardModel]
+
+  @model_validator(mode="after")
+  def validate_integrity(self) -> "BoardModel":
+    column_ids = [column.id for column in self.columns]
+    if len(column_ids) != len(set(column_ids)):
+      raise ValueError("Column ids must be unique")
+
+    referenced_card_ids: list[str] = []
+    for column in self.columns:
+      referenced_card_ids.extend(column.cardIds)
+
+    if len(referenced_card_ids) != len(set(referenced_card_ids)):
+      raise ValueError("Card ids must not appear in more than one column")
+
+    cards_by_key = set(self.cards.keys())
+    for card_key, card in self.cards.items():
+      if card.id != card_key:
+        raise ValueError("Card id must match its dictionary key")
+
+    referenced_set = set(referenced_card_ids)
+    missing_cards = referenced_set - cards_by_key
+    if missing_cards:
+      raise ValueError("All referenced card ids must exist in cards")
+
+    orphan_cards = cards_by_key - referenced_set
+    if orphan_cards:
+      raise ValueError("All cards must be referenced by a column")
+
+    return self
 
 
 DEFAULT_BOARD: dict[str, object] = {
@@ -167,6 +196,8 @@ def run_migrations() -> None:
 
 def initialize_database() -> None:
   with get_db() as db:
+    # For MVP UX, start each server launch at the login screen.
+    db.execute("DELETE FROM sessions")
     db.execute(
       """
       INSERT INTO users (username, password)
@@ -263,11 +294,10 @@ def auth_logout(response: Response, pm_session: str | None = Cookie(default=None
 
 
 @app.get("/api/board")
-def board_get(response: Response, pm_session: str | None = Cookie(default=None)) -> dict[str, object] | dict[str, str]:
+def board_get(pm_session: str | None = Cookie(default=None)) -> dict[str, object]:
   user = get_session_user(pm_session)
   if not user:
-    response.status_code = status.HTTP_401_UNAUTHORIZED
-    return {"message": "Unauthorized"}
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
   with get_db() as db:
     row = db.execute(
@@ -290,11 +320,10 @@ def board_get(response: Response, pm_session: str | None = Cookie(default=None))
 
 
 @app.put("/api/board")
-def board_put(board: BoardModel, response: Response, pm_session: str | None = Cookie(default=None)) -> dict[str, bool] | dict[str, str]:
+def board_put(board: BoardModel, pm_session: str | None = Cookie(default=None)) -> dict[str, bool]:
   user = get_session_user(pm_session)
   if not user:
-    response.status_code = status.HTTP_401_UNAUTHORIZED
-    return {"message": "Unauthorized"}
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
   with get_db() as db:
     db.execute(

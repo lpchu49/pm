@@ -274,23 +274,23 @@ Migration/init strategy:
 - Implement API routes for loading and mutating user board data.
 
 ### Checklist
-- [ ] Add API endpoints for board fetch and board update operations.
-- [ ] Enforce request/response validation with Pydantic models.
-- [ ] Ensure board operations are scoped to authenticated user.
-- [ ] Auto-create DB on first startup when missing.
-- [ ] Add clear error handling and status codes.
+- [x] Add API endpoints for board fetch and board update operations.
+- [x] Enforce request/response validation with Pydantic models.
+- [x] Ensure board operations are scoped to authenticated user.
+- [x] Auto-create DB on first startup when missing.
+- [x] Add clear error handling and status codes.
 
 ### Tests
-- [ ] Backend unit tests for service/data layers.
-- [ ] API tests for success and failure cases:
-	- [ ] Missing auth is rejected.
-	- [ ] Invalid payload is rejected with validation error.
-	- [ ] Valid payload persists and can be reloaded.
-	- [ ] Nonexistent user/board handling is deterministic.
+- [x] Backend unit tests for service/data layers.
+- [x] API tests for success and failure cases:
+	- [x] Missing auth is rejected.
+	- [x] Invalid payload is rejected with validation error.
+	- [x] Valid payload persists and can be reloaded.
+	- [x] Nonexistent user/board handling is deterministic.
 
 ### Success criteria
-- [ ] API is stable and fully covered for core CRUD paths used by frontend.
-- [ ] Board state persists across app restarts.
+- [x] API is stable and fully covered for core CRUD paths used by frontend.
+- [x] Board state persists across app restarts.
 
 ## Part 7: Frontend + Backend integration
 
@@ -298,21 +298,21 @@ Migration/init strategy:
 - Switch frontend state source from local in-memory data to backend API.
 
 ### Checklist
-- [ ] Replace direct `initialData` usage with API-backed load on authenticated entry.
-- [ ] Persist board updates (rename/add/delete/move) through backend calls.
-- [ ] Add optimistic or immediate refresh strategy with clear error fallback.
-- [ ] Keep UI responsive during loading/saving states.
+- [x] Replace direct `initialData` usage with API-backed load on authenticated entry.
+- [x] Persist board updates (rename/add/delete/move) through backend calls.
+- [x] Add optimistic or immediate refresh strategy with clear error fallback.
+- [x] Keep UI responsive during loading/saving states.
 
 ### Tests
-- [ ] Frontend integration tests with API mocks.
-- [ ] E2E tests against running backend:
-	- [ ] Board loads from backend.
-	- [ ] Board edits persist after page refresh.
-	- [ ] Persistence remains after app restart.
+- [x] Frontend integration tests with API mocks.
+- [x] E2E tests against running backend:
+	- [x] Board loads from backend.
+	- [x] Board edits persist after page refresh.
+	- [x] Persistence remains after app restart.
 
 ### Success criteria
-- [ ] User-visible board is truly persistent, not local-only.
-- [ ] Core Kanban interactions remain functional.
+- [x] User-visible board is truly persistent, not local-only.
+- [x] Core Kanban interactions remain functional.
 
 ## Part 8: AI connectivity (OpenRouter)
 
