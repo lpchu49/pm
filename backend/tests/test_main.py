@@ -203,11 +203,6 @@ def test_ai_diagnostic_returns_model_output(
 
 
 def test_ai_diagnostic_live_openrouter_network(client: TestClient) -> None:
-    if os.getenv("RUN_OPENROUTER_LIVE_TEST") != "1":
-        pytest.skip("Set RUN_OPENROUTER_LIVE_TEST=1 to run the live OpenRouter test")
-
-    if not os.getenv("OPENROUTER_API_KEY"):
-        pytest.skip("OPENROUTER_API_KEY is required for live OpenRouter test")
 
     login_response = client.post(
         "/api/auth/login",

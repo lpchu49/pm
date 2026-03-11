@@ -1,9 +1,11 @@
+import hashlib
 import secrets
 import sqlite3
 import json
 import os
 import urllib.error
 import urllib.request
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -16,7 +18,15 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import Cookie, HTTPException, Response, status
 
-app = FastAPI(title="Project Management MVP API")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+  run_migrations()
+  initialize_database()
+  yield
+
+
+app = FastAPI(title="Project Management MVP API", lifespan=lifespan)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DATA_DIR = Path(__file__).resolve().parent / "data"
 DB_PATH = DATA_DIR / "app.db"
@@ -98,22 +108,22 @@ AI_CHAT_SYSTEM_PROMPT = """You are an AI assistant for a Kanban project manageme
 You can help users manage their board by creating, moving, renaming, or deleting cards and columns.
 
 You MUST always respond with a valid JSON object with exactly this shape:
-{{
+{
   "assistant_text": "<your response to the user>",
   "board_update": <full board payload object, or null>
-}}
+}
 
 Rules:
 - assistant_text is required and must be a non-empty string.
 - Set board_update to null when making no board changes.
 - When making board changes, board_update must be the COMPLETE board (all columns and all cards). Never partial.
-- Board shape: {{"columns": [{{"id":"...","title":"...","cardIds":["..."]}}], "cards":{{"id":{{"id":"...","title":"...","details":"..."}}}}}}
+- Board shape: {"columns": [{"id":"...","title":"...","cardIds":["..."]}], "cards":{"id":{"id":"...","title":"...","details":"..."}}}
 - All cardIds referenced in columns must exist in cards.
 - All cards must be placed in exactly one column.
 - Column ids must be unique. Card dict keys must match each card's id field.
 
 Current board state:
-{board_json}"""
+"""
 
 
 DEFAULT_BOARD: dict[str, object] = {
@@ -167,6 +177,21 @@ DEFAULT_BOARD: dict[str, object] = {
     },
   },
 }
+
+
+def hash_password(password: str) -> str:
+  salt = secrets.token_hex(16)
+  hashed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000).hex()
+  return f"{salt}:{hashed}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+  try:
+    salt, hashed = stored.split(":", 1)
+    check = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000).hex()
+    return secrets.compare_digest(check, hashed)
+  except Exception:
+    return False
 
 
 def get_db() -> sqlite3.Connection:
@@ -245,15 +270,10 @@ def initialize_database() -> None:
       """
       INSERT INTO users (username, password)
       VALUES (?, ?)
-      ON CONFLICT(username) DO NOTHING
+      ON CONFLICT(username) DO UPDATE SET password = excluded.password
       """,
-      ("user", "password"),
+      ("user", hash_password("password")),
     )
-@app.on_event("startup")
-def on_startup() -> None:
-  run_migrations()
-  initialize_database()
-
 
 def get_session_user(session_token: str | None) -> dict[str, str | int] | None:
   if not session_token:
@@ -361,11 +381,11 @@ def auth_session(pm_session: str | None = Cookie(default=None)) -> dict[str, str
 def auth_login(payload: LoginRequest, response: Response) -> dict[str, str | bool]:
   with get_db() as db:
     row = db.execute(
-      "SELECT id, username FROM users WHERE username = ? AND password = ?",
-      (payload.username, payload.password),
+      "SELECT id, username, password FROM users WHERE username = ?",
+      (payload.username,),
     ).fetchone()
 
-    if not row:
+    if not row or not verify_password(payload.password, row["password"]):
       response.status_code = status.HTTP_401_UNAUTHORIZED
       return {"authenticated": False, "message": "Invalid credentials"}
 
@@ -480,7 +500,7 @@ def ai_chat(
     ).fetchone()
   current_board = json.loads(row["payload"]) if row else DEFAULT_BOARD
 
-  system_content = AI_CHAT_SYSTEM_PROMPT.format(board_json=json.dumps(current_board))
+  system_content = AI_CHAT_SYSTEM_PROMPT + json.dumps(current_board)
   messages: list[dict] = [{"role": "system", "content": system_content}]
   for msg in payload.history:
     messages.append({"role": msg.role, "content": msg.content})
