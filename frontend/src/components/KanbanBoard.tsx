@@ -15,6 +15,7 @@ import {
 } from "@dnd-kit/core";
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
+import { AIChatSidebar } from "@/components/AIChatSidebar";
 import { createId, initialData, moveCard, type BoardData } from "@/lib/kanban";
 
 type KanbanBoardProps = {
@@ -28,6 +29,7 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
   const [isLoadingBoard, setIsLoadingBoard] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const failedSaveBoardRef = useRef<BoardData | null>(null);
 
   const loadBoard = useCallback(async () => {
@@ -47,6 +49,19 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
       setBoard(null);
     } finally {
       setIsLoadingBoard(false);
+    }
+  }, []);
+
+  // Silent background refresh used by AI chat — does not show loading state
+  // so AIChatSidebar stays mounted and preserves message history
+  const refreshBoardSilently = useCallback(async () => {
+    try {
+      const response = await fetch("/api/board");
+      if (!response.ok) return;
+      const payload = (await response.json()) as { board?: BoardData };
+      setBoard(payload.board ?? initialData);
+    } catch {
+      // Silent fail — keep showing existing board
     }
   }, []);
 
@@ -248,15 +263,25 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--gray-text)]">
                   Signed in as {username}
                 </p>
-                {onLogout ? (
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={onLogout}
-                    className="rounded-full border border-[var(--stroke)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-[var(--navy-dark)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)]"
+                    onClick={() => setSidebarOpen((prev) => !prev)}
+                    aria-label="Toggle AI chat sidebar"
+                    className="rounded-full border border-[var(--primary-blue)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-[var(--primary-blue)] transition hover:bg-[var(--primary-blue)] hover:text-white"
                   >
-                    Log out
+                    AI Chat
                   </button>
-                ) : null}
+                  {onLogout ? (
+                    <button
+                      type="button"
+                      onClick={onLogout}
+                      className="rounded-full border border-[var(--stroke)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-[var(--navy-dark)] transition hover:border-[var(--primary-blue)] hover:text-[var(--primary-blue)]"
+                    >
+                      Log out
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>
@@ -323,6 +348,12 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
           </DragOverlay>
         </DndContext>
       </main>
+
+      <AIChatSidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        onBoardUpdated={() => void refreshBoardSilently()}
+      />
     </div>
   );
 };

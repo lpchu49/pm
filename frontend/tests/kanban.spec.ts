@@ -230,3 +230,97 @@ test("persists board changes after page refresh", async ({ page }) => {
     page.locator('[data-testid="column-col-backlog"]').getByLabel("Column title")
   ).toHaveValue("Refresh Persisted Backlog");
 });
+
+test("opens and closes AI chat sidebar", async ({ page }) => {
+  await login(page);
+  await resetBoard(page);
+
+  // Toggle button is visible; sidebar is off-screen (not in viewport) until opened
+  const toggleBtn = page.getByRole("button", { name: "Toggle AI chat sidebar" });
+  await expect(toggleBtn).toBeVisible();
+  await expect(page.getByTestId("ai-chat-sidebar")).not.toBeInViewport();
+
+  await toggleBtn.click();
+  await expect(page.getByRole("heading", { name: "Board Chat" })).toBeVisible();
+  await expect(page.getByTestId("ai-chat-sidebar")).toBeInViewport();
+
+  await page.getByRole("button", { name: "Close AI chat sidebar" }).click();
+  await expect(page.getByTestId("ai-chat-sidebar")).not.toBeInViewport();
+});
+
+test("AI chat: sends a message and renders response", async ({ page }) => {
+  await login(page);
+  await resetBoard(page);
+
+  await page.route("**/api/ai/chat", (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ assistant_text: "Happy to help!", board_updated: false }),
+    });
+  });
+
+  await page.getByRole("button", { name: "Toggle AI chat sidebar" }).click();
+  await expect(page.getByRole("heading", { name: "Board Chat" })).toBeVisible();
+
+  await page.getByLabel("Chat message input").fill("Hello AI");
+  await page.getByRole("button", { name: /^send$/i }).click();
+
+  await expect(page.getByTestId("ai-chat-messages").getByText("Hello AI")).toBeVisible();
+  await expect(page.getByTestId("ai-chat-messages").getByText("Happy to help!")).toBeVisible();
+});
+
+test("AI chat: board update refreshes board columns", async ({ page }) => {
+  await login(page);
+  await resetBoard(page);
+
+  const updatedBoard: BoardPayload = {
+    columns: [
+      { id: "col-backlog", title: "AI Renamed", cardIds: ["card-1"] },
+      { id: "col-discovery", title: "Discovery", cardIds: ["card-2"] },
+      { id: "col-progress", title: "In Progress", cardIds: ["card-3"] },
+      { id: "col-review", title: "Review", cardIds: ["card-4"] },
+      { id: "col-done", title: "Done", cardIds: [] },
+    ],
+    cards: {
+      "card-1": { id: "card-1", title: "Task A", details: "" },
+      "card-2": { id: "card-2", title: "Task B", details: "" },
+      "card-3": { id: "card-3", title: "Task C", details: "" },
+      "card-4": { id: "card-4", title: "Task D", details: "" },
+    },
+  };
+
+  // Track when the AI chat route fires so the subsequent board GET returns the updated board
+  let chatFired = false;
+
+  await page.route("**/api/board", (route) => {
+    if (route.request().method() === "GET" && chatFired) {
+      void route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ board: updatedBoard }),
+      });
+    } else {
+      void route.continue();
+    }
+  });
+
+  await page.route("**/api/ai/chat", (route) => {
+    chatFired = true;
+    void route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ assistant_text: "I renamed the first column.", board_updated: true }),
+    });
+  });
+
+  await page.getByRole("button", { name: "Toggle AI chat sidebar" }).click();
+  await expect(page.getByRole("heading", { name: "Board Chat" })).toBeVisible();
+  await page.getByLabel("Chat message input").fill("Rename backlog to AI Renamed");
+  await page.getByRole("button", { name: /^send$/i }).click();
+
+  await expect(page.getByTestId("ai-chat-messages").getByText("I renamed the first column.")).toBeVisible();
+  await expect(
+    page.locator('[data-testid="column-col-backlog"]').getByLabel("Column title")
+  ).toHaveValue("AI Renamed");
+});

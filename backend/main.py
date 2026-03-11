@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from alembic import command
 from alembic.config import Config
@@ -80,6 +81,39 @@ class BoardModel(BaseModel):
 
 class DiagnosticAIRequest(BaseModel):
   prompt: str = "What is 2+2? Answer with just the number."
+
+
+class ChatMessage(BaseModel):
+  role: Literal["user", "assistant"]
+  content: str
+
+
+class AIChatRequest(BaseModel):
+  message: str
+  history: list[ChatMessage] = []
+
+
+AI_CHAT_SYSTEM_PROMPT = """You are an AI assistant for a Kanban project management board.
+
+You can help users manage their board by creating, moving, renaming, or deleting cards and columns.
+
+You MUST always respond with a valid JSON object with exactly this shape:
+{{
+  "assistant_text": "<your response to the user>",
+  "board_update": <full board payload object, or null>
+}}
+
+Rules:
+- assistant_text is required and must be a non-empty string.
+- Set board_update to null when making no board changes.
+- When making board changes, board_update must be the COMPLETE board (all columns and all cards). Never partial.
+- Board shape: {{"columns": [{{"id":"...","title":"...","cardIds":["..."]}}], "cards":{{"id":{{"id":"...","title":"...","details":"..."}}}}}}
+- All cardIds referenced in columns must exist in cards.
+- All cards must be placed in exactly one column.
+- Column ids must be unique. Card dict keys must match each card's id field.
+
+Current board state:
+{board_json}"""
 
 
 DEFAULT_BOARD: dict[str, object] = {
@@ -256,13 +290,11 @@ def get_openrouter_api_key() -> str:
   return api_key
 
 
-def call_openrouter(prompt: str) -> str:
+def call_openrouter_messages(messages: list[dict]) -> str:
   api_key = get_openrouter_api_key()
   request_body = {
     "model": OPENROUTER_MODEL,
-    "messages": [
-      {"role": "user", "content": prompt},
-    ],
+    "messages": messages,
   }
 
   encoded_body = json.dumps(request_body).encode("utf-8")
@@ -306,6 +338,10 @@ def call_openrouter(prompt: str) -> str:
     )
 
   return output
+
+
+def call_openrouter(prompt: str) -> str:
+  return call_openrouter_messages([{"role": "user", "content": prompt}])
 
 
 @app.get("/api/health")
@@ -426,6 +462,63 @@ def ai_diagnostic(
 
   output = call_openrouter(payload.prompt)
   return {"model": OPENROUTER_MODEL, "output": output}
+
+
+@app.post("/api/ai/chat")
+def ai_chat(
+  payload: AIChatRequest,
+  pm_session: str | None = Cookie(default=None),
+) -> dict[str, object]:
+  user = get_session_user(pm_session)
+  if not user:
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
+
+  with get_db() as db:
+    row = db.execute(
+      "SELECT payload FROM boards WHERE user_id = ?",
+      (user["id"],),
+    ).fetchone()
+  current_board = json.loads(row["payload"]) if row else DEFAULT_BOARD
+
+  system_content = AI_CHAT_SYSTEM_PROMPT.format(board_json=json.dumps(current_board))
+  messages: list[dict] = [{"role": "system", "content": system_content}]
+  for msg in payload.history:
+    messages.append({"role": msg.role, "content": msg.content})
+  messages.append({"role": "user", "content": payload.message})
+
+  raw_output = call_openrouter_messages(messages)
+
+  try:
+    ai_response = json.loads(raw_output)
+  except json.JSONDecodeError:
+    return {"assistant_text": "The AI returned an unreadable response. Please try again.", "board_updated": False}
+
+  assistant_text = ai_response.get("assistant_text", "")
+  if not isinstance(assistant_text, str) or not assistant_text.strip():
+    return {"assistant_text": "The AI returned an invalid response. Please try again.", "board_updated": False}
+
+  board_update_data = ai_response.get("board_update")
+  if board_update_data is None:
+    return {"assistant_text": assistant_text, "board_updated": False}
+
+  try:
+    validated_board = BoardModel.model_validate(board_update_data)
+  except Exception:
+    return {"assistant_text": assistant_text, "board_updated": False}
+
+  with get_db() as db:
+    db.execute(
+      """
+      INSERT INTO boards (user_id, payload, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET
+        payload = excluded.payload,
+        updated_at = excluded.updated_at
+      """,
+      (user["id"], json.dumps(validated_board.model_dump()), datetime.now(UTC).isoformat()),
+    )
+
+  return {"assistant_text": assistant_text, "board_updated": True}
 
 
 if STATIC_DIR.exists():

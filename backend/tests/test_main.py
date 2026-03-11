@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 import sqlite3
+import json
 import os
 import re
 from typing import Iterator
@@ -286,3 +287,141 @@ def test_run_migrations_stamps_legacy_schema(tmp_path: Path, monkeypatch: pytest
     assert row is not None
     assert row[0] == "20260310_0001"
     assert {"users", "sessions", "boards"}.issubset(tables)
+
+
+# --- Part 9: AI chat contract ---
+
+MINIMAL_BOARD = {
+    "columns": [
+        {"id": "col-1", "title": "Todo", "cardIds": ["card-1"]},
+    ],
+    "cards": {
+        "card-1": {"id": "card-1", "title": "Task", "details": ""},
+    },
+}
+
+
+def _login(client: TestClient) -> None:
+    response = client.post("/api/auth/login", json={"username": "user", "password": "password"})
+    assert response.status_code == 200
+
+
+def test_ai_chat_requires_auth(client: TestClient) -> None:
+    response = client.post("/api/ai/chat", json={"message": "hello", "history": []})
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Unauthorized"}
+
+
+def test_ai_chat_returns_text_only_when_no_board_update(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _login(client)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    ai_output = json.dumps({"assistant_text": "Hello! How can I help?", "board_update": None})
+    monkeypatch.setattr(main, "call_openrouter_messages", lambda _msgs: ai_output)
+
+    response = client.post("/api/ai/chat", json={"message": "hi", "history": []})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["assistant_text"] == "Hello! How can I help?"
+    assert data["board_updated"] is False
+
+
+def test_ai_chat_applies_valid_board_update(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _login(client)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    ai_output = json.dumps({"assistant_text": "Done! Added a card.", "board_update": MINIMAL_BOARD})
+    monkeypatch.setattr(main, "call_openrouter_messages", lambda _msgs: ai_output)
+
+    response = client.post("/api/ai/chat", json={"message": "Add a task", "history": []})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["assistant_text"] == "Done! Added a card."
+    assert data["board_updated"] is True
+
+    board_response = client.get("/api/board")
+    assert board_response.status_code == 200
+    assert board_response.json()["board"] == MINIMAL_BOARD
+
+
+def test_ai_chat_preserves_board_on_invalid_json(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _login(client)
+    client.put("/api/board", json=MINIMAL_BOARD)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr(main, "call_openrouter_messages", lambda _msgs: "not valid json {{")
+
+    response = client.post("/api/ai/chat", json={"message": "help", "history": []})
+
+    assert response.status_code == 200
+    assert response.json()["board_updated"] is False
+
+    board_response = client.get("/api/board")
+    assert board_response.json()["board"] == MINIMAL_BOARD
+
+
+def test_ai_chat_preserves_board_on_invalid_board_schema(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _login(client)
+    client.put("/api/board", json=MINIMAL_BOARD)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    invalid_board = {"columns": [{"id": "col-1", "title": "Bad", "cardIds": ["missing-card"]}], "cards": {}}
+    ai_output = json.dumps({"assistant_text": "Here is your update.", "board_update": invalid_board})
+    monkeypatch.setattr(main, "call_openrouter_messages", lambda _msgs: ai_output)
+
+    response = client.post("/api/ai/chat", json={"message": "update", "history": []})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["assistant_text"] == "Here is your update."
+    assert data["board_updated"] is False
+
+    board_response = client.get("/api/board")
+    assert board_response.json()["board"] == MINIMAL_BOARD
+
+
+def test_ai_chat_includes_history_and_board_in_messages(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _login(client)
+    client.put("/api/board", json=MINIMAL_BOARD)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    captured: list[list] = []
+
+    def capture(msgs: list) -> str:
+        captured.append(msgs)
+        return json.dumps({"assistant_text": "ok", "board_update": None})
+
+    monkeypatch.setattr(main, "call_openrouter_messages", capture)
+
+    history = [
+        {"role": "user", "content": "prev question"},
+        {"role": "assistant", "content": "prev answer"},
+    ]
+    response = client.post("/api/ai/chat", json={"message": "new question", "history": history})
+
+    assert response.status_code == 200
+    assert len(captured) == 1
+    msgs = captured[0]
+
+    roles = [m["role"] for m in msgs]
+    assert roles[0] == "system"
+    contents = [m["content"] for m in msgs]
+    # System prompt contains current board JSON
+    assert "col-1" in contents[0]
+    assert "prev question" in contents
+    assert "prev answer" in contents
+    assert "new question" in contents
