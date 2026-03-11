@@ -10,8 +10,8 @@ type SessionState = {
 
 export const AuthGate = () => {
     const [session, setSession] = useState<SessionState>({ status: "loading" });
-    const [username, setUsername] = useState("user");
-    const [password, setPassword] = useState("password");
+    const [username, setUsername] = useState("");
+    const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -66,7 +66,11 @@ export const AuthGate = () => {
     };
 
     const handleLogout = async () => {
-        await fetch("/api/auth/logout", { method: "POST" });
+        try {
+            await fetch("/api/auth/logout", { method: "POST" });
+        } catch {
+            // Network error — still transition to unauthenticated
+        }
         setSession({ status: "unauthenticated" });
         setError("");
     };

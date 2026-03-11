@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import main
+from models import BoardModel
 
 
 def build_valid_board() -> dict[str, object]:
@@ -23,7 +23,7 @@ def build_valid_board() -> dict[str, object]:
 
 def test_board_model_accepts_valid_payload() -> None:
     payload = build_valid_board()
-    board = main.BoardModel.model_validate(payload)
+    board = BoardModel.model_validate(payload)
 
     assert len(board.columns) == 2
     assert set(board.cards.keys()) == {"card-1", "card-2"}
@@ -34,7 +34,7 @@ def test_board_model_rejects_duplicate_card_reference() -> None:
     payload["columns"][1]["cardIds"] = ["card-1"]
 
     with pytest.raises(ValidationError):
-        main.BoardModel.model_validate(payload)
+        BoardModel.model_validate(payload)
 
 
 def test_board_model_rejects_orphan_card() -> None:
@@ -46,4 +46,4 @@ def test_board_model_rejects_orphan_card() -> None:
     }
 
     with pytest.raises(ValidationError):
-        main.BoardModel.model_validate(payload)
+        BoardModel.model_validate(payload)

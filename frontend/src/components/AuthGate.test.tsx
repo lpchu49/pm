@@ -69,7 +69,16 @@ describe("AuthGate", () => {
             })
         );
         fetchMock.mockResolvedValueOnce(
-            new Response(JSON.stringify({}), {
+            new Response(JSON.stringify({
+                board: {
+                    columns: [
+                        { id: "col-1", title: "Todo", cardIds: ["card-1"] },
+                    ],
+                    cards: {
+                        "card-1": { id: "card-1", title: "Task", details: "" },
+                    },
+                },
+            }), {
                 status: 200,
                 headers: { "Content-Type": "application/json" },
             })
@@ -84,6 +93,8 @@ describe("AuthGate", () => {
         render(<AuthGate />);
 
         await screen.findByRole("heading", { name: /sign in/i });
+        await userEvent.type(screen.getByLabelText(/username/i), "user");
+        await userEvent.type(screen.getByLabelText(/password/i), "password");
         await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
         expect(await screen.findByRole("heading", { name: /kanban studio/i })).toBeInTheDocument();

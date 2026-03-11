@@ -16,7 +16,7 @@ import {
 import { KanbanColumn } from "@/components/KanbanColumn";
 import { KanbanCardPreview } from "@/components/KanbanCardPreview";
 import { AIChatSidebar } from "@/components/AIChatSidebar";
-import { createId, initialData, moveCard, type BoardData } from "@/lib/kanban";
+import { createId, moveCard, type BoardData } from "@/lib/kanban";
 
 type KanbanBoardProps = {
   onLogout?: () => void;
@@ -31,6 +31,7 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
   const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const failedSaveBoardRef = useRef<BoardData | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const loadBoard = useCallback(async () => {
     setIsLoadingBoard(true);
@@ -43,7 +44,10 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
       }
 
       const payload = (await response.json()) as { board?: BoardData };
-      setBoard(payload.board ?? initialData);
+      if (!payload.board) {
+        throw new Error("Board data missing from response");
+      }
+      setBoard(payload.board);
     } catch {
       setLoadError("Unable to load the board right now.");
       setBoard(null);
@@ -59,7 +63,9 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
       const response = await fetch("/api/board");
       if (!response.ok) return;
       const payload = (await response.json()) as { board?: BoardData };
-      setBoard(payload.board ?? initialData);
+      if (payload.board) {
+        setBoard(payload.board);
+      }
     } catch {
       // Silent fail — keep showing existing board
     }
@@ -70,6 +76,10 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
   }, [loadBoard]);
 
   const persistBoard = useCallback(async (nextBoard: BoardData) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setSaveState("saving");
     try {
       const response = await fetch("/api/board", {
@@ -78,6 +88,7 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
           "Content-Type": "application/json",
         },
         body: JSON.stringify(nextBoard),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -86,7 +97,8 @@ export const KanbanBoard = ({ onLogout, username = "user" }: KanbanBoardProps) =
 
       failedSaveBoardRef.current = null;
       setSaveState("idle");
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       failedSaveBoardRef.current = nextBoard;
       setSaveState("error");
     }

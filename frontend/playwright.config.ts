@@ -1,7 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3000";
-const shouldStartDevServer = !process.env.PLAYWRIGHT_BASE_URL;
+const baseURL = process.env.PLAYWRIGHT_BASE_URL;
+
+if (!baseURL) {
+  throw new Error(
+    "PLAYWRIGHT_BASE_URL is required. E2E tests must run against the Docker container:\n" +
+    "  PLAYWRIGHT_BASE_URL=http://127.0.0.1:8000 npm run test:e2e"
+  );
+}
 
 export default defineConfig({
   testDir: "./tests",
@@ -13,14 +19,6 @@ export default defineConfig({
     baseURL,
     trace: "retain-on-failure",
   },
-  webServer: shouldStartDevServer
-    ? {
-      command: "npm run dev -- --hostname 127.0.0.1 --port 3000",
-      url: "http://127.0.0.1:3000",
-      reuseExistingServer: true,
-      timeout: 120_000,
-    }
-    : undefined,
   projects: [
     {
       name: "chromium",
