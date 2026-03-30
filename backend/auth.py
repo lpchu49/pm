@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+import sqlite3
 from datetime import UTC, datetime
 
 import db
@@ -23,13 +24,16 @@ def verify_password(password: str, stored: str) -> bool:
     return False
 
 
-def get_session_user(session_token: str | None) -> dict[str, str | int] | None:
+def get_session_user(
+  session_token: str | None,
+  conn: "sqlite3.Connection | None" = None,
+) -> dict[str, str | int] | None:
   if not session_token:
     return None
 
-  now_iso = datetime.now(UTC).isoformat()
-  with db.get_db() as conn:
-    row = conn.execute(
+  def _query(c: "sqlite3.Connection") -> dict[str, str | int] | None:
+    now_iso = datetime.now(UTC).isoformat()
+    row = c.execute(
       """
       SELECT users.id, users.username, sessions.expires_at
       FROM sessions
@@ -40,17 +44,23 @@ def get_session_user(session_token: str | None) -> dict[str, str | int] | None:
     ).fetchone()
     if not row:
       return None
-
     if row["expires_at"] <= now_iso:
-      conn.execute("DELETE FROM sessions WHERE token = ?", (session_token,))
+      c.execute("DELETE FROM sessions WHERE token = ?", (session_token,))
       return None
-
     return {"id": row["id"], "username": row["username"]}
 
+  if conn is not None:
+    return _query(conn)
+  with db.get_db() as c:
+    return _query(c)
 
-def require_auth(pm_session: str | None) -> dict[str, str | int]:
+
+def require_auth(
+  pm_session: str | None,
+  conn: sqlite3.Connection | None = None,
+) -> dict[str, str | int]:
   from fastapi import HTTPException, status
-  user = get_session_user(pm_session)
+  user = get_session_user(pm_session, conn)
   if not user:
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
   return user

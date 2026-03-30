@@ -69,6 +69,7 @@ Rules:
 - All cardIds referenced in columns must exist in cards.
 - All cards must be placed in exactly one column.
 - Column ids must be unique. Card dict keys must match each card's id field.
+- When renaming a card or column, preserve its existing id. Only generate new ids for newly created items.
 
 Current board state:
 """

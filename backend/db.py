@@ -30,6 +30,12 @@ def get_db() -> Iterator[sqlite3.Connection]:
     connection.close()
 
 
+def get_request_db() -> Iterator[sqlite3.Connection]:
+  """FastAPI dependency that provides a single DB connection per request."""
+  with get_db() as conn:
+    yield conn
+
+
 def run_migrations() -> None:
   DATA_DIR.mkdir(parents=True, exist_ok=True)
   config = Config(str(ALEMBIC_INI_PATH))

@@ -3,6 +3,7 @@
 Original review: 2026-03-11 (Sonnet)
 Second pass: 2026-03-11 (Opus)
 Fixes applied: 2026-03-11 (Opus) — all High and Medium issues resolved
+Low-severity fixes: 2026-03-30 (Opus) — all Low issues resolved
 Scope: entire repository (backend, frontend, tests, infra)
 
 Status legend: H = High, M = Medium, L = Low
@@ -241,18 +242,18 @@ generates accurate OpenAPI schemas and validates responses at the server.
 
 ---
 
-## Remaining findings (Low severity — not yet addressed)
+## Low severity findings (all resolved)
 
-| ID | Area | Description |
-|----|------|-------------|
-| L1 | Frontend | Array index used as React key in chat messages |
-| L2 | Both | Fixture data duplicated across locations (partially addressed — `initialData` removed) |
-| L3 | Frontend | `Math.random()` used for ID generation |
-| L4 | Frontend | 4-space indentation in `AIChatSidebar.tsx` |
-| L5 | Backend | Two DB connections opened per authenticated request |
-| L6 | Backend | AI prompt does not require stable IDs on rename |
-| L7 | Frontend tests | Large inline fixture in `KanbanBoard.test.tsx` (extracted to `BOARD_FIXTURE` const) |
-| L8 | Backend | `secure=False` cookie not documented for deployment |
-| L9 | Frontend | `handleLogout` does not handle fetch failure (fixed as a side effect of M6 work) |
-| L10 | Backend | OpenRouter error body not truncated (fixed as a side effect of module split — `[:500]` in `openrouter.py`) |
-| L11 | Backend | `get_db()` creates `DATA_DIR` on every call (fixed as part of H3) |
+| ID | Area | Description | Status |
+|----|------|-------------|--------|
+| L1 | Frontend | Array index used as React key in chat messages | FIXED — `ChatMessage` now carries a monotonic `id` field used as the React key |
+| L2 | Both | Fixture data duplicated across locations | FIXED — frontend `initialData` removed (M2); test fixture is intentionally separate |
+| L3 | Frontend | `Math.random()` used for ID generation | FIXED — `createId()` now uses `crypto.getRandomValues()` |
+| L4 | Frontend | 4-space indentation in `AIChatSidebar.tsx` | FIXED — reformatted to 2-space indentation matching the rest of the frontend |
+| L5 | Backend | Two DB connections opened per authenticated request | FIXED — added `get_request_db()` FastAPI dependency; all routes share a single connection per request |
+| L6 | Backend | AI prompt does not require stable IDs on rename | FIXED — system prompt now instructs the model to preserve existing IDs on rename |
+| L7 | Frontend tests | Large inline fixture in `KanbanBoard.test.tsx` | FIXED — extracted to `BOARD_FIXTURE` const |
+| L8 | Backend | `secure=False` cookie not documented for deployment | FIXED — comment added explaining localhost-only usage and production guidance |
+| L9 | Frontend | `handleLogout` does not handle fetch failure | FIXED — side effect of M6 work |
+| L10 | Backend | OpenRouter error body not truncated | FIXED — side effect of module split (`[:500]` in `openrouter.py`) |
+| L11 | Backend | `get_db()` creates `DATA_DIR` on every call | FIXED — side effect of H3 |
